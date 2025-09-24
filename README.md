@@ -127,16 +127,6 @@ wgflask/
 
 ---
 ## Diff & Fixes
-The following diff shows the key security changes applied:
-
-```diff
-- save_config_to_file(directory, filename, config)
-+ def save_configuration(user_id, config_data):
-+     fernet = derive_key(user_id)
-+     encrypted_data = fernet.encrypt(config_data.encode())
-+     with open(os.path.join(current_app.config['CONFIG_DIR'], f"{current_user.name}_client.conf"), "wb") as file:
-+         file.write(encrypted_data)
-
 
 Full diff file is available as question3.diff for reference.
 
