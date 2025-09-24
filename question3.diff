@@ -1,0 +1,418 @@
+diff -cr wgflask.orig/main.py wgflask/main.py
+*** wgflask.orig/main.py	2024-11-17 23:21:03.807595200 +0000
+--- wgflask/main.py	2024-11-17 23:23:56.349171400 +0000
+***************
+*** 3,9 ****
+  import io
+  import base64
+  import os
+! from flask import Blueprint, render_template, request, send_from_directory, current_app, abort, flash, redirect, url_for, session
+  from . import db
+  from flask_login import login_required, current_user
+  from .forms import AdminWGForm, UserWGForm
+--- 3,9 ----
+  import io
+  import base64
+  import os
+! from flask import Blueprint, render_template, request, send_from_directory, current_app, abort, flash, redirect, url_for, session, make_response
+  from . import db
+  from flask_login import login_required, current_user
+  from .forms import AdminWGForm, UserWGForm
+***************
+*** 12,120 ****
+  from .peer import Peer
+  from .wgconfig import WGServer
+  import configparser
+  
+  main = Blueprint('main', __name__)
+  
+  @main.route('/')
+  def index():
+! 	return render_template('index.html')
+  
+  @main.route('/profile', methods=['GET', 'POST'])
+  @login_required
+  def profile():
+!     if (session.get('role') == 'admin'):
+          form = AdminWGForm(request.form)
+      else:
+          form = UserWGForm(request.form)
+      server_config = None
+      client_configs = [{"config": None, "qr": None}]
+      
+!     if (form.validate_on_submit()) and (session.get('role') == 'admin'):
+!         port = form.port.data
+!         clients = form.clients.data
+!         cidr = form.cidr.data
+!         allowed_ips = form.allowed_ips.data
+!         endpoint = form.endpoint.data
+!         dns = form.dns.data
+!         uprule = form.uprule.data
+!         downrule = form.downrule.data
+!         preshared = form.preshared.data
+! 
+!         # Create server configuration using WGServer
+!         wg_server, priv_key = WGServer.create_server_config(port, cidr, endpoint, uprule, downrule)
+!         server_pub_key = WireGuardKeyGenerator.generate_public_key(priv_key)
+! 
+!         # Generate client configurations
+!         client_configs = Peer.load_client_configs(
+!             clients=clients,
+!             port=port,
+!             cidr=cidr,
+!             allowed_ips=allowed_ips,
+!             endpoint=endpoint,
+!             dns=dns,
+!             preshared=preshared,
+!             server_pub_key=server_pub_key
+!         )
+! 
+!         # Add peers to the server configuration(load_server_config)
+!         wg_server.add_peers_to_config(client_configs)
+!         server_config = wg_server.load_server_config()
+! 
+!         # Save server and client configurations
+!         wg_server.to_file(os.path.join(
+!             current_app.config['CONFIG_DIR'], 
+!             f"admin_server.conf"
+!         ))
+! 
+!         save_config_to_file(
+!             current_app.config['CONFIG_DIR'],
+!             f"admin_client.conf",
+!             [config['config'] for config in client_configs]
+!         )
+!     elif (form.validate_on_submit()) and (session.get('role') == 'user'):
+!         clients = form.clients.data
+!         preshared = form.preshared.data
+!         allowed_ips = form.allowed_ips.data
+! 
+!         config = configparser.ConfigParser()
+!         config.read('./configs/admin_server.conf')
+!         port = config['Interface']['ListenPort']
+!         cidr = config['Interface']['Address']
+!         num_peers = int(config['Interface']['Num_Peers'])
+!         priv_key = config['Interface']['PrivateKey']
+!         if 'DNS' in config['Interface']:
+!             dns = config['Interface']['DNS']
+!         else:
+!             dns = None
+!         if 'Endpoint' in config['Interface']:
+!             endpoint = config['Interface']['Endpoint']
+!         else:
+!             endpoint = None
+!         wg_server = WGServer(interface=config['Interface'])
+!         server_pub_key = WireGuardKeyGenerator.generate_public_key(priv_key)
+! 
+!         # Generate client configurations
+!         client_configs = Peer.load_client_configs(
+!             clients=clients,
+!             port=port,
+!             cidr=cidr,
+!             allowed_ips=allowed_ips,
+!             endpoint=endpoint,
+!             dns=dns,
+!             preshared=preshared,
+!             server_pub_key=server_pub_key,
+!             num_peers=num_peers + 2
+!         )
+! 
+!         # Add peers to the server configuration
+!         wg_server.add_peers_to_config(client_configs)
+!         server_config = wg_server.append_server_config()
+! 
+!         save_config_to_file(
+!             current_app.config['CONFIG_DIR'],
+!             f"{current_user.name}_client.conf",
+!             [config['config'] for config in client_configs]
+!         )
+  
+      form_errors = not form.validate_on_submit()
+      return render_template(
+--- 12,134 ----
+  from .peer import Peer
+  from .wgconfig import WGServer
+  import configparser
++ from cryptography.fernet import Fernet
++ import base64
++ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
++ import hashlib
++ from cryptography.hazmat.primitives import hashes
+  
+  main = Blueprint('main', __name__)
+  
+  @main.route('/')
+  def index():
+!     return render_template('index.html')
+! 
+  
+  @main.route('/profile', methods=['GET', 'POST'])
+  @login_required
+  def profile():
+!     if session.get('role') == 'admin':
+          form = AdminWGForm(request.form)
+      else:
+          form = UserWGForm(request.form)
++ 
+      server_config = None
+      client_configs = [{"config": None, "qr": None}]
++ 
++     if form.validate_on_submit() and session.get('role') == 'admin':
++         try:
++             port = form.port.data
++             clients = form.clients.data
++             cidr = form.cidr.data
++             allowed_ips = form.allowed_ips.data
++             endpoint = form.endpoint.data
++             dns = form.dns.data
++             uprule = form.uprule.data
++             downrule = form.downrule.data
++             preshared = form.preshared.data
++ 
++             # Create server configuration using WGServer
++             wg_server, priv_key = WGServer.create_server_config(port, cidr, endpoint, uprule, downrule)
++             server_pub_key = WireGuardKeyGenerator.generate_public_key(priv_key)
++ 
++             # Generate client configurations
++             client_configs = Peer.load_client_configs(
++                 clients=clients,
++                 port=port,
++                 cidr=cidr,
++                 allowed_ips=allowed_ips,
++                 endpoint=endpoint,
++                 dns=dns,
++                 preshared=preshared,
++                 server_pub_key=server_pub_key
++             )
++ 
++             # Add peers to the server configuration
++             wg_server.add_peers_to_config(client_configs)
++             server_config = wg_server.load_server_config()
++ 
++             # Save server and client configurations
++             wg_server.to_file(os.path.join(
++                 current_app.config['CONFIG_DIR'], 
++                 f"admin_server.conf"
++             ))
++     
++             #Encrypt and save client configurations
++             encrypted_client_config = admin_fernet.encrypt(
++                 "\n".join([config['config'] for config in client_configs]).encode()
++             )
++             with open(os.path.join(current_app.config['CONFIG_DIR'], f"admin_client.conf"), "wb") as file:
++                 file.write(encrypted_client_config)
++ 
++         except Exception as e:
++             print(f"Error in admin configuration handling: {e}")
++             flash("An error occurred while saving admin configurations.", "error")
++ 
++     elif form.validate_on_submit() and session.get('role') == 'user':
++         try:
++             clients = form.clients.data
++             preshared = form.preshared.data
++             allowed_ips = form.allowed_ips.data
++     
++             config = configparser.ConfigParser()
++             config.read('./configs/admin_server.conf')
++             port = config['Interface']['ListenPort']
++             cidr = config['Interface']['Address']
++             num_peers = int(config['Interface']['Num_Peers'])
++             priv_key = config['Interface']['PrivateKey']
++             dns = config['Interface'].get('DNS', None)
++             endpoint = config['Interface'].get('Endpoint', None)
++     
++             wg_server = WGServer(interface=config['Interface'])
++             server_pub_key = WireGuardKeyGenerator.generate_public_key(priv_key)
+      
+!             # Generate user changes
+!             client_configs = Peer.load_client_configs(
+!                 clients=clients,
+!                 port=port,
+!                 cidr=cidr,
+!                 allowed_ips=allowed_ips,
+!                 endpoint=endpoint,
+!                 dns=dns,
+!                 preshared=preshared,
+!                 server_pub_key=server_pub_key,
+!                 num_peers=num_peers + 2
+!             )
+!     
+!             # Add peers to the server configuration
+!             wg_server.add_peers_to_config(client_configs)
+!             server_config = wg_server.append_server_config()
+!     
+!             # Save user's configuration separately
+!             save_configuration(
+!                 user_id=current_user.id,
+!                 config_data="\n".join([config['config'] for config in client_configs])
+!             )
+!         except Exception as e:
+!             print(f"Error in user configuration handling: {e}")
+!             flash("An error occurred while saving your configurations.", "error")
+! 
+  
+      form_errors = not form.validate_on_submit()
+      return render_template(
+***************
+*** 136,146 ****
+          flash('No filename provided.', 'error')
+          return redirect('/profile')
+  
+!     if not os.path.exists(os.path.join(current_app.config['CONFIG_DIR'], filename)):
+          flash('File not found.', 'error')
+          return redirect('/profile')
+  
+-     return  send_from_directory(os.path.join("../", current_app.config['CONFIG_DIR']), filename, as_attachment=True)
+  
+  def save_config_to_file(directory, filename, config):
+      filepath = os.path.join(directory, filename)
+--- 150,204 ----
+          flash('No filename provided.', 'error')
+          return redirect('/profile')
+  
+!     config_path = os.path.join(current_app.config['CONFIG_DIR'], filename)
+! 
+!     # Check if the current user is an admin
+!     if session.get('role') == 'admin':
+!         try:
+!             with open(config_path, "rb") as file:
+!                 encrypted_data = file.read()
+! 
+!                 # Check the file being downloaded
+!                 if filename == "admin_client.conf":
+!                     # Decrypt admin client configuration
+!                     try:
+!                         decrypted_data = admin_fernet.decrypt(encrypted_data).decode()
+!                     except Exception:
+!                         decrypted_data = encrypted_data.decode()  # If not encrypted, serve as plaintext
+!                 else:
+!                     # Serve other admin files as plaintext
+!                     decrypted_data = encrypted_data.decode()
+! 
+!             response = make_response(decrypted_data)
+!             response.headers['Content-Disposition'] = f'attachment; filename={filename}'
+!             response.mimetype = 'text/plain'
+!             return response
+! 
+!         except FileNotFoundError:
+!             flash('File not found.', 'error')
+!             return redirect('/profile')
+!         except Exception as e:
+!             print(f"Error in admin file handling: {e}")
+!             flash("An error occurred while processing the admin file.", "error")
+!             return redirect('/profile')
+! 
+!     # For regular users
+!     try:
+!         decrypted_data = load_configuration(current_user.id, filename)
+!         response = make_response(decrypted_data)
+!         response.headers['Content-Disposition'] = f'attachment; filename={filename}'
+!         response.mimetype = 'text/plain'
+!         return response
+! 
+!     except FileNotFoundError:
+          flash('File not found.', 'error')
+          return redirect('/profile')
++     except Exception as e:
++         flash('Error occurred while processing the file.', 'error')
++         print(f"Download error: {e}")
++         return redirect('/profile')
++ 
+  
+  
+  def save_config_to_file(directory, filename, config):
+      filepath = os.path.join(directory, filename)
+***************
+*** 151,156 ****
+--- 209,282 ----
+              f.write(line)
+  
+  
++ # Helper function: Derive user-specific encryption key
++ def derive_key(user_id):
++     """Derive a secure encryption key from a user-specific salt."""
++     user_specific_salt = hashlib.sha256(str(user_id).encode()).digest()
++ 
++     kdf = PBKDF2HMAC(
++         algorithm=hashes.SHA256(),
++         length=32,
++         salt=user_specific_salt,
++         iterations=100000,
++     )
++     key = base64.urlsafe_b64encode(kdf.derive(str(user_id).encode()))
++     return Fernet(key)
++ 
++ 
++ def save_configuration(user_id, config_data):
++     """Encrypt and save the configuration file for a specific user."""
++     try:
++         config_path = os.path.join(current_app.config['CONFIG_DIR'], f"{current_user.name}_client.conf")
++         print(f"Saving configuration to: {config_path}")  # Debugging
++ 
++         fernet = derive_key(user_id)
++         encrypted_data = fernet.encrypt(config_data.encode())
++ 
++         with open(config_path, "wb") as file:
++             file.write(encrypted_data)
++     except Exception as e:
++         print(f"Error in save_configuration: {e}")  # Debugging
++         raise
++ 
++ 
++ 
++ # Load configuration securely
++ def load_configuration(user_id, filename):
++     """Load and decrypt the configuration file for a specific user."""
++     config_path = os.path.join(current_app.config['CONFIG_DIR'], filename)
++     if not os.path.exists(config_path):
++         raise FileNotFoundError("Configuration file not found.")
++ 
++     fernet = derive_key(user_id)
++     with open(config_path, "rb") as file:
++         encrypted_data = file.read()
++     decrypted_data = fernet.decrypt(encrypted_data)
++     return decrypted_data.decode()
++ 
++ def derive_admin_key(admin_data):
++     """Derive a secure encryption key from the admin's data."""
++     admin_specific_salt = hashlib.sha256(admin_data.encode()).digest()
++     kdf = PBKDF2HMAC(
++         algorithm=hashes.SHA256(),
++         length=32,
++         salt=admin_specific_salt,
++         iterations=100000,
++     )
++     key = base64.urlsafe_b64encode(kdf.derive(admin_data.encode()))
++     return Fernet(key)
++ 
++ @main.before_request
++ def set_admin_fernet():
++     """Set admin fernet dynamically based on admin data."""
++     if session.get('role') == 'admin' and current_user.is_authenticated:
++         admin_data = str(current_user.id)  # Use admin's unique ID instead of name
++         global admin_fernet
++         admin_fernet = derive_admin_key(admin_data)
++ 
++ 
++ 
++ 
+  def admin_required(f):
+      @wraps(f)
+      def decorated_function(*args, **kwargs):
+diff -cr wgflask.orig/requirements.txt wgflask/requirements.txt
+*** wgflask.orig/requirements.txt	2024-11-17 19:22:12.787062900 +0000
+--- wgflask/requirements.txt	2024-11-17 23:04:33.055853600 +0000
+***************
+*** 4,7 ****
+  flask-login==0.6.3
+  qrcode==8.0
+  flask-wtf==1.2.1
+! pillow==10.0.1
+\ No newline at end of file
+--- 4,8 ----
+  flask-login==0.6.3
+  qrcode==8.0
+  flask-wtf==1.2.1
+! pillow==10.0.1
+! cryptography==41.0.0
+\ No newline at end of file

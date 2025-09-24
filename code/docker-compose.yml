@@ -1,0 +1,17 @@
+version: '3'
+services:
+  wgconfig:
+     build:
+        context: .
+        dockerfile: Dockerfile
+     ports:
+       - "5000:5000"
+     restart: unless-stopped
+     networks:
+       - wgflask
+     environment:
+       - FLASK_RUN_HOST=0.0.0.0
+
+networks:
+  wgflask:
+    driver: bridge

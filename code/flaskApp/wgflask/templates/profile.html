@@ -1,0 +1,295 @@
+{% extends "base.html" %}
+
+{% block content %}
+<head>
+    <title>Profile</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/bulma/0.9.3/css/bulma.min.css">
+    <style>
+        .modal {
+            display: none;
+        }
+        .scrollable-div {
+            height: 600px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        <div class="notification is-danger">
+          {% for category, message in messages %}
+            <p>{{ message }}</p>
+          {% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+
+    <div class="columns">
+        <!-- First column for the form -->
+        <div class="column">
+            <!-- Button to open modal -->
+            <button class="button is-primary is-large" id="config-button" style="margin-top: 150px;">Edit Wireguard Config</button>
+
+            <h2 class="title">Download Configurations</h2>
+
+            {% if session.get('role') == 'admin' %}
+            <div class="notification is-info">
+                <form method="POST" action="{{ url_for('main.download_file') }}" target="download-frame">
+                    <input type="hidden" name="filename" value="{{ name + '_server.conf' }}">
+                    <button type="submit" class="button is-primary">Download Server Config</button>
+                </form>
+            </div>
+            {% endif %}
+
+            <form method="POST" action="{{ url_for('main.download_file') }}" target="download-frame" style="margin-top: 10px;">
+                <input type="hidden" name="filename" value="{{ name + '_client.conf' }}">
+                <button type="submit" class="button is-primary">Download Client Config</button>
+            </form>
+
+            <iframe id="download-frame" style="display:none;"></iframe>
+
+            <!-- Modal -->
+            <div class="modal" id="config-modal">
+                <div class="modal-background"></div>
+                <div class="modal-card">
+                    <header class="modal-card-head">
+                        <p class="modal-card-title">Wireguard Config</p>
+                        <button class="delete" id="modal-close" aria-label="close"></button>
+                    </header>
+                    <section class="modal-card-body">
+                        <!-- Your form goes here -->
+                        <form method="POST" action="/profile">
+                            {{ form.hidden_tag() }}
+                            {% if session.get('role') == 'admin' %}
+                            <div class="columns">
+                                <div class="column">
+                                    <div class="field">
+                                        <label for="port" class="label has-text-centered">{{ form.port.label }}</label>
+                                        <div class="control">
+                                            {{ form.port(class="input") }}
+                                            {% if form.port.errors %}
+                                            <p class="help is-danger">{{ form.port.errors[0] }}</p>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="column">
+                                    <div class="field">
+                                        <label for="clients" class="label has-text-centered">{{ form.clients.label }}</label>
+                                        <div class="control">
+                                            {{ form.clients(class="input") }}
+                                            {% if form.clients.errors %}
+                                            <p class="help is-danger">{{ form.clients.errors[0] }}</p>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div class="columns">
+                                <div class="column">
+                                    <div class="field">
+                                        <label for="cidr" class="label has-text-centered">{{ form.cidr.label }}</label>
+                                        <div class="control">
+                                            {{ form.cidr(class="input") }}
+                                            {% if form.cidr.errors %}
+                                            <p class="help is-danger">{{ form.cidr.errors[0] }}</p>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="column">
+                                    <div class="field">
+                                        <label for="allowed_ips" class="label has-text-centered">{{ form.allowed_ips.label }}</label>
+                                        <div class="control">
+                                            {{ form.allowed_ips(class="input") }}
+                                            {% if form.allowed_ips.errors %}
+                                            <p class="help is-danger">{{ form.allowed_ips.errors[0] }}</p>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
+                            {% if session.get('role') == 'user' %}
+                            <div class="columns">
+                                <div class="column">
+                                    <div class="field">
+                                        <label for="clients" class="label has-text-centered">{{ form.clients.label }}</label>
+                                        <div class="control">
+                                            {{ form.clients(class="input") }}
+                                            {% if form.clients.errors %}
+                                            <p class="help is-danger">{{ form.clients.errors[0] }}</p>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="column">
+                                    <div class="field">
+                                        <label for="allowed_ips" class="label has-text-centered">{{ form.allowed_ips.label }}</label>
+                                        <div class="control">
+                                            {{ form.allowed_ips(class="input") }}
+                                            {% if form.allowed_ips.errors %}
+                                            <p class="help is-danger">{{ form.allowed_ips.errors[0] }}</p>
+                                            {% endif %}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {% endif %}
+                            <button class="button is-link" id="toggle-optional" style="margin-bottom: 1rem;">Show Optional Fields</button>
+                            
+                            <!-- Optional Fields, initially hidden -->
+                            <div id="optional-fields" style="display: none;">
+                                {% if session.get('role') == 'admin' %}
+                                <div class="columns">
+                                    <div class="column">
+                                        <div class="field">
+                                            <label for="endpoint" class="label has-text-centered">{{ form.endpoint.label }}</label>
+                                            <div class="control">
+                                                {{ form.endpoint(class="input") }}
+                                                {% if form.endpoint.errors %}
+                                                <p class="help is-danger">{{ form.endpoint.errors[0] }}</p>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="column">
+                                        <div class="field">
+                                            <label for="dns" class="label has-text-centered">{{ form.dns.label }}</label>
+                                            <div class="control">
+                                                {{ form.dns(class="input") }}
+                                                {% if form.dns.errors %}
+                                                <p class="help is-danger">{{ form.dns.errors[0] }}</p>
+                                                {% endif %}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="field">
+                                    <label for="downrule" class="label has-text-centered">{{ form.downrule.label }}</label>
+                                    <div class="control">
+                                        {{ form.downrule(class="input") }}
+                                        {% if form.downrule.errors %}
+                                        <p class="help is-danger">{{ form.downrule.errors[0] }}</p>
+                                        {% endif %}
+                                    </div>
+                                </div>
+
+                                <div class="field">
+                                    <label for="uprule" class="label has-text-centered">{{ form.uprule.label }}</label>
+                                    <div class="control">
+                                        {{ form.uprule(class="input") }}
+                                        {% if form.uprule.errors %}
+                                        <p class="help is-danger">{{ form.uprule.errors[0] }}</p>
+                                        {% endif %}
+                                    </div>
+                                </div>
+                                {% endif %}
+                                <div class="field" style="margin-top: 2rem; margin-bottom: 2rem;">
+                                    <div class="control">
+                                        <label class="checkbox">
+                                            {{ form.preshared() }}
+                                            <span style="display: inline-block;">{{ form.preshared.label.text }}</span>
+                                        </label>
+                                    </div>
+                                </div>
+                    </section>
+                    <footer class="modal-card-foot">
+                        <button class="button" id="modal-close-footer">Cancel</button>
+                        <div class="field is-grouped is-grouped-centered">
+                            <div class="control">
+                                <button type="submit" class="button is-link">Submit</button>
+                            </div>
+                            <div class="control">
+                                <button type="reset" class="button is-light">Reset</button>
+                            </div>
+                        </div>
+                    </footer>
+                </form>
+                </div>
+            </div>
+        </div>
+
+        <!-- Second column for the configurations -->
+        <div class="column">
+            {% if session.get('role') == 'admin' %}
+            <!-- Server Configuration -->
+            <div class="card">
+                <header class="card-header">
+                    <p class="card-header-title">Server Configuration</p>
+                </header>
+                <div class="card-content">
+                    <div class="content">
+                        <pre id="server-config-content" style="text-align:left;">{{ server_config | safe if server_config else "No Server Configuration Yet..." }}</pre>
+                        <button class="button is-link" id="copy-btn">Copy to Clipboard</button>
+                    </div>
+                </div>
+            </div>
+            {% endif %}
+
+            <div class="scrollable-div">
+                <!-- Client Configurations -->
+                {% for client_config in client_configs %}
+                <div class="card" style="margin-top: 20px;">
+                    <header class="card-header">
+                        <p class="card-header-title">Client Configuration</p>
+                    </header>
+                    <div class="card-content">
+                        <div class="content">
+                            <pre style="text-align:left;">{{ client_config.config | safe if client_config.config else "No Client Configuration Yet..." }}</pre>
+                            {% if client_config.qr %}
+                            <img src="data:image/png;base64,{{ client_config.qr }}" width="150" height="150"/>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <script>
+        document.querySelector("#config-button").addEventListener("click", function() {
+            document.querySelector("#config-modal").style.display = "flex";
+        });
+
+        document.querySelectorAll("#modal-close, #modal-close-footer").forEach(function(button) {
+            button.addEventListener("click", function() {
+                document.querySelector("#config-modal").style.display = "none";
+            });
+        });
+        document.getElementById('toggle-optional').addEventListener('click', function(event) {
+            event.preventDefault(); // Prevents form submission
+            const optionalFields = document.getElementById('optional-fields');
+            if (optionalFields.style.display === 'none') {
+                optionalFields.style.display = 'block';
+                this.textContent = 'Hide Optional Fields';
+            } else {
+                optionalFields.style.display = 'none';
+                this.textContent = 'Show Optional Fields';
+            }
+        });
+
+
+        document.querySelector("#copy-btn").addEventListener("click", function() {
+            var el = document.createElement('textarea');
+            el.value = document.querySelector("#server-config-content").innerText;
+            el.setAttribute('readonly', '');
+            el.style = { position: 'absolute', left: '-9999px' };
+            document.body.appendChild(el);
+            el.select();
+            document.execCommand('copy');
+            document.body.removeChild(el);
+        });
+
+        function startDownload() {
+            document.getElementById('download-form').submit();
+        }
+    </script>
+</body>
+{% endblock %}
